@@ -15,11 +15,12 @@
 #include <consensus/consensus.h>
 #include <crypto/common.h>
 #include <crypto/sha256.h>
-#include <primitives/transaction.h>
 #include <netbase.h>
+#include <primitives/transaction.h>
 #include <scheduler.h>
 #include <ui_interface.h>
 #include <util/strencodings.h>
+#include <util/translation.h>
 
 #ifdef WIN32
 #include <string.h>
@@ -79,7 +80,7 @@ static const uint64_t RANDOMIZER_ID_LOCALHOSTNONCE = 0xd93e69e2bbfa5735ULL; // S
 //
 bool fDiscover = true;
 bool fListen = true;
-bool fRelayTxes = true;
+bool g_relay_txes = !DEFAULT_BLOCKSONLY;
 CCriticalSection cs_mapLocalHost;
 std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(cs_mapLocalHost);
 static bool vfLimited[NET_MAX] GUARDED_BY(cs_mapLocalHost) = {};
@@ -1765,9 +1766,15 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
                 addr = addrman.Select(fFeeler);
             }
 
-            // if we selected an invalid address, restart
-            if (!addr.IsValid() || setConnected.count(addr.GetGroup()) || IsLocal(addr))
+            // Require outbound connections, other than feelers, to be to distinct network groups
+            if (!fFeeler && setConnected.count(addr.GetGroup())) {
                 break;
+            }
+
+            // if we selected an invalid or local address, restart
+            if (!addr.IsValid() || IsLocal(addr)) {
+                break;
+            }
 
             // If we didn't find an appropriate destination after trying 100 addresses fetched from addrman,
             // stop this loop, and let the outer loop run again (which sleeps, adds seed nodes, recalculates
@@ -2033,9 +2040,9 @@ bool CConnman::BindListenPort(const CService &addrBind, std::string& strError, b
     {
         int nErr = WSAGetLastError();
         if (nErr == WSAEADDRINUSE)
-            strError = strprintf(_("Unable to bind to %s on this computer. %s is probably already running."), addrBind.ToString(), _(PACKAGE_NAME));
+            strError = strprintf(_("Unable to bind to %s on this computer. %s is probably already running.").translated, addrBind.ToString(), PACKAGE_NAME);
         else
-            strError = strprintf(_("Unable to bind to %s on this computer (bind returned error %s)"), addrBind.ToString(), NetworkErrorString(nErr));
+            strError = strprintf(_("Unable to bind to %s on this computer (bind returned error %s)").translated, addrBind.ToString(), NetworkErrorString(nErr));
         LogPrintf("%s\n", strError);
         CloseSocket(hListenSocket);
         return false;
@@ -2045,7 +2052,7 @@ bool CConnman::BindListenPort(const CService &addrBind, std::string& strError, b
     // Listen for incoming connections
     if (listen(hListenSocket, SOMAXCONN) == SOCKET_ERROR)
     {
-        strError = strprintf(_("Error: Listening for incoming connections failed (listen returned error %s)"), NetworkErrorString(WSAGetLastError()));
+        strError = strprintf(_("Error: Listening for incoming connections failed (listen returned error %s)").translated, NetworkErrorString(WSAGetLastError()));
         LogPrintf("%s\n", strError);
         CloseSocket(hListenSocket);
         return false;
@@ -2186,7 +2193,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     if (fListen && !InitBinds(connOptions.vBinds, connOptions.vWhiteBinds)) {
         if (clientInterface) {
             clientInterface->ThreadSafeMessageBox(
-                _("Failed to listen on any port. Use -listen=0 if you want this."),
+                _("Failed to listen on any port. Use -listen=0 if you want this.").translated,
                 "", CClientUIInterface::MSG_ERROR);
         }
         return false;
@@ -2197,7 +2204,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     }
 
     if (clientInterface) {
-        clientInterface->InitMessage(_("Loading P2P addresses..."));
+        clientInterface->InitMessage(_("Loading P2P addresses...").translated);
     }
     // Load addresses from peers.dat
     int64_t nStart = GetTimeMillis();
@@ -2212,7 +2219,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         }
     }
 
-    uiInterface.InitMessage(_("Starting network threads..."));
+    uiInterface.InitMessage(_("Starting network threads...").translated);
 
     fAddressesInitialized = true;
 
@@ -2252,7 +2259,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     if (connOptions.m_use_addrman_outgoing && !connOptions.m_specified_outgoing.empty()) {
         if (clientInterface) {
             clientInterface->ThreadSafeMessageBox(
-                _("Cannot provide specific connections and have addrman find outgoing connections at the same."),
+                _("Cannot provide specific connections and have addrman find outgoing connections at the same.").translated,
                 "", CClientUIInterface::MSG_ERROR);
         }
         return false;
@@ -2281,8 +2288,8 @@ public:
         WSACleanup();
 #endif
     }
-}
-instance_of_cnetcleanup;
+};
+static CNetCleanup instance_of_cnetcleanup;
 
 void CConnman::Interrupt()
 {
@@ -2621,7 +2628,6 @@ CNode::CNode(NodeId idIn, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn
 {
     hSocket = hSocketIn;
     addrName = addrNameIn == "" ? addr.ToStringIPPort() : addrNameIn;
-    strSubVer = "";
     hashContinue = uint256();
     filterInventoryKnown.reset();
     pfilter = MakeUnique<CBloomFilter>();
